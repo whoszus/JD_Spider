@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 __author__ = 'Gobi Xu'
 
-
 import scrapy
 import datetime
 import json
-from OnlineStore.items import Jd_phoneItem
+from items import Jd_phoneItem
+import pandas as pd
 
 
 # 商品列表页的每一页都有 60个商品，但是请求商品列表页时，只会显示 前30个商品，剩下的30个商品 是下滑商品列表页时 异步加载 出来的
@@ -18,45 +18,71 @@ class JdPhoneSpider(scrapy.Spider):
     name = 'jd_phone'
     allowed_domains = ['jd.com']
     # 需要爬取的 类目
-    keyword = '手机'
+    keyword = '图书'
     # 商品列表页的 初始页
     page = 1
     # 商品列表页 的请求地址
-    top_thirty_url = 'https://search.jd.com/Search?keyword=%s&enc=utf-8&qrst=1&rt=1&stop=1&vt=2&cid2=653&cid3=655&page=%d&click=0'
+    top_thirty_url = 'https://search.jd.com/Search?keyword=%s&enc=utf-8&qrst=1&rt=1&stop=1&vt=2&page=%d&click=0'
+    # 'https://search.jd.com/Search?keyword=%s&enc=utf-8&suggest=1.his.0.0&wq=&pvid=7f2c7c4b332d431f9084b8dc86578cfd'
     # 商品列表页 异步加载得到的 剩下30个商品 的请求地址
     later_thirty_url = 'https://search.jd.com/s_new.php?keyword=%s&enc=utf-8&qrst=1&rt=1&stop=1&vt=2&cid2=653&cid3=655&page=%d&scrolling=y&tpl=3_M&show_items=%s'
     # 商品评论js页面 的请求地址
     comment_url = 'https://club.jd.com/comment/productCommentSummaries.action?referenceIds=%s'
+    price_list = []
+    store_list = []
+    author_list = []
+    name_list = []
 
     # custom_settings = {}
 
     def start_requests(self):
         # 请求 商品列表页的第1页，获取的商品列表页只包含 前30个商品
-        yield scrapy.Request(url=self.top_thirty_url%(self.keyword,self.page), callback=self.parse)
+        url=self.top_thirty_url % (self.keyword, self.page)
+        yield scrapy.Request(url=url, callback=self.parse)
 
     def parse(self, response):
         # id_list用于获取 商品列表页前30个商品id
         id_list = []
         # 获取商品列表页 前30个商品的gl-item列表
         gl_items = response.css('.gl-item')
+
+
+
+
         for gl_item in gl_items:
+            tag = gl_item.css('.gl-i-wrap span::text').extract_first('')
+            if tag == '广告':
+                continue
             # 获取 商品价格
             price = float(gl_item.css('.gl-i-wrap .p-price strong i::text').extract_first(0))
+            store = gl_item.css('.gl-i-wrap .p-bookdetails .p-bi-store ::text').extract_first()
+            author = gl_item.css('.gl-i-wrap .p-bookdetails .p-bi-name a::text').extract_first()
+            name = gl_item.css('.gl-i-wrap .p-name a em::text').extract_first('')
+
+            self.price_list.append(price)
+            self.store_list.append(store)
+            self.author_list.append(author)
+            self.name_list.append(name)
+            print()
+
             # 获取 商品详情页请求地址
             url = gl_item.css('.gl-i-wrap .p-name a::attr(href)').extract_first('')
             # 如果地址以 // 开头，将它转换成 http：//（例：//item.jd.com/5089253.html >> http：//item.jd.com/5089253.html）
-            if url.startswith('//'):
-                url = ''.join(['http:', url])
+            # if url.startswith('//'):
+                # url = ''.join(['http:', url])
             # 获取 商品id 并且加入到 id_list
-            id = gl_item.css('.gl-item::attr(data-pid)').extract_first('')
-            id_list.append(id)
+            # id = gl_item.css('.gl-item::attr(data-pid)').extract_first('')
+            # id_list.append(id)
             # 回调到 处理 商品评论js页面 的函数
-            yield scrapy.Request(url=self.comment_url%(id), callback=self.parseComment, meta={'price':price,'url':url})
-        if self.page <= 199:
+            # yield scrapy.Request(url=self.comment_url % (id), callback=self.parseComment,
+            #                      meta={'price': price, 'url': url})
+
+        if self.page <= 20:
             self.page += 1
-            id_list = ','.join(id_list)
-            # 回调到 处理 商品列表页剩下30个商品 的函数
-            yield scrapy.Request(url=self.later_thirty_url%(self.keyword,self.page,id_list), callback=self.parseNext, headers={'Referer':response.url})
+            url=self.top_thirty_url % (self.keyword, self.page)
+            yield scrapy.Request(url=url, callback=self.parse)
+        dataframe = pd.DataFrame({'书名':self.name_list,'作者':self.author_list,'价格':self.price_list,'出版社':self.store_list})
+        dataframe.to_csv("books.csv",index=False,sep=',')
 
     def parseNext(self, response):
         # 处理方式和 parse函数 基本无差别
@@ -67,11 +93,12 @@ class JdPhoneSpider(scrapy.Spider):
             if url.startswith('//'):
                 url = ''.join(['http:', url])
             id = gl_item.css('.gl-item::attr(data-pid)').extract_first('')
-            yield scrapy.Request(url=self.comment_url%(id), callback=self.parseComment, meta={'price':price,'url':url})
-        if self.page <= 199:
+            yield scrapy.Request(url=self.comment_url % (id), callback=self.parseDetail,
+                                 meta={'price': price, 'url': url})
+        if self.page <= 2:
             self.page += 1
             # 回调到 处理 下一页商品列表页 的函数
-            yield scrapy.Request(url=self.top_thirty_url%(self.keyword,self.page), callback=self.parse)
+            yield scrapy.Request(url=self.top_thirty_url % (self.keyword, self.page), callback=self.parse)
 
     def parseComment(self, response):
         comment_dict = json.loads(response.text)['CommentsCount'][0]
@@ -88,11 +115,15 @@ class JdPhoneSpider(scrapy.Spider):
         # 获取 商品id
         id = comment_dict.get('SkuId', 0)
         # 回调到 处理 商品详情页 的函数
-        yield scrapy.Request(url=response.meta['url'], callback=self.parseDetail, meta={'price':response.meta['price'],'comment_count':comment_count,'good_count':good_count,'general_count':general_count,'poor_count':poor_count,'show_count':show_count,'id':id})
+        yield scrapy.Request(url=response.meta['url'], callback=self.parseDetail,
+                             meta={'price': response.meta['price'], 'comment_count': comment_count,
+                                   'good_count': good_count, 'general_count': general_count, 'poor_count': poor_count,
+                                   'show_count': show_count, 'id': id})
 
     def parseDetail(self, response):
         # 获取 商品标题
         title = response.css('#spec-img::attr(alt)').extract_first('')
+        print(title)
         # 获取 商品品牌
         brand = response.css('.inner.border .head a::text').extract_first('')
         if not brand:
@@ -104,7 +135,8 @@ class JdPhoneSpider(scrapy.Spider):
         # 获取 商品的店名
         shop_name = response.css('.J-hove-wrap.EDropdown.fr .item .name a::text').extract_first('')
         if not shop_name:
-            shop_name = response.css('.item.hide.J-im-item .J-im-btn .im.customer-service::attr(data-seller)').extract_first('')
+            shop_name = response.css(
+                '.item.hide.J-im-item .J-im-btn .im.customer-service::attr(data-seller)').extract_first('')
         # 获取 商品url
         url = response.url
         # 获取 当前时间
@@ -133,3 +165,4 @@ class JdPhoneSpider(scrapy.Spider):
         item['show_count'] = show_count
         item['crawl_date'] = crawl_date
         yield item
+

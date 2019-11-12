@@ -1,3 +1,4 @@
+import scrapy
 class Jd_phoneItem(scrapy.Item):
     id = scrapy.Field()
     title = scrapy.Field()
